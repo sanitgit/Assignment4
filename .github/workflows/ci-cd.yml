@@ -1,49 +1,63 @@
-name: CI/CD Pipeline
-
+name: PRD ##change based on environment eg: STG or PRD
 on:
-  push:
-    branches:
+  push: ## for auto build when code triggered in below branch
+    branches: 
       - main
-      - 'feature/*'
-
+      - feature/**
+  workflow_dispatch:
 jobs:
   build:
-    runs-on: ubuntu-latest
-    
+    name: Frontend-install
+    runs-on: ubuntu-20.04  
+    strategy:
+      matrix:
+        node-version: [16]
+    env: ## ----> Change below values <---- ##
+      NODE_OPTIONS: --max_old_space_size=8192
+      BUILD_ENV: STG
+      DISTRIBUTION_ID_FE: E1S000000001K
+      NODE_ENV: production
+      BUCKET_NAME: nis-frontend
+      ## ----> modify end section <---- ## 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v2
+      - uses: actions/checkout@v2
 
-    - name: Set up Node.js
-      uses: actions/setup-node@v2
-      with:
-        node-version: '14'
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v2
+        with:
+          node-version: ${{ matrix.node-version }}
 
-    - name: Install dependencies
-      run: npm install
+      - name: npm install
+        run: |
+          npm install
 
-    - name: Run tests
-      run: npm test
+      - name: Build
+        run: |
+          npm --production=false install && npm rebuild node-sass
+          npm run build
 
-  deploy:
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v2
+      - name: Configure AWS cli
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
 
-    - name: Set up Node.js
-      uses: actions/setup-node@v2
-      with:
-        node-version: '14'
+      - name: Deploy Portal
+        uses: jakejarvis/s3-sync-action@v0.5.1
+        with:
+          args: --acl public-read --delete
+        env:
+          AWS_S3_BUCKET: ${{ env.BUCKET_NAME }}
+          NEXT_PUBLIC_API_URL: ${{ env.NEXT_PUBLIC_API_URL }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
+          SOURCE_DIR: "./out"
 
-    - name: Install dependencies
-      run: npm install
-
-    - name: Build project
-      run: npm run build
-
-    - name: Deploy to production
-      run: echo "Deploying to production..."
-     
+      - name: Invalidate CF
+        run: |
+          aws cloudfront create-invalidation --distribution-id ${{ env.DISTRIBUTION_ID_FE }} --paths '/*'
+      
+      - name: Debug
+        uses: hmarr/debug-action@v2
